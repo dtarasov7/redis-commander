@@ -1,0 +1,44 @@
+@startuml
+title Redis Commander TUI - UI Key Workflow
+
+actor User
+participant "RedisCommanderUI" as UI
+participant "KeyListView" as KeyList
+participant "AddKeyDialog" as Dialog
+participant "RedisConnection" as Conn
+participant "Redis Client" as Redis
+
+User -> UI: Select profile / DB
+UI -> Conn: connect_to_profile() / select_db()
+UI -> Redis: refresh_keys()
+Redis --> UI: keys with types
+UI -> KeyList: set_keys(keys_with_types)
+
+User -> KeyList: Select key
+KeyList -> UI: key_selected(key)
+UI -> Redis: display_key_details(key)
+Redis --> UI: metadata + value
+
+alt Add new key
+  User -> UI: Press F3
+  UI -> Dialog: show_add_key_dialog()
+  User -> Dialog: Enter type, value, TTL
+  Dialog -> Redis: on_save()
+  Redis --> Dialog: OK
+  Dialog -> UI: on_success()
+  UI -> Redis: refresh_keys()
+else Edit key
+  User -> UI: Press F4
+  UI -> Dialog: show_edit_key_dialog()
+  Dialog -> Redis: load_key_data()
+  Redis --> Dialog: current value
+  User -> Dialog: Change value
+  Dialog -> Redis: on_save()
+  UI -> Redis: refresh_keys()
+else Delete key
+  User -> UI: Click Delete Key / Press F8
+  UI -> Redis: delete_key() / delete_marked_keys()
+  UI -> Redis: refresh_keys()
+end
+
+@enduml

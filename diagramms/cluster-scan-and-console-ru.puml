@@ -1,0 +1,37 @@
+@startuml
+title Redis Commander TUI - Cluster scan и консоль
+
+actor User as "Пользователь"
+participant "RedisCommanderUI" as UI
+participant "Cluster Client" as Cluster
+participant "Master Node A" as NodeA
+participant "Master Node B" as NodeB
+participant "Console" as Console
+
+== Сканирование кластера ==
+"Пользователь" -> UI: Подключиться к cluster profile
+UI -> Cluster: connect_to_profile()
+UI -> Cluster: refresh_keys()
+Cluster -> NodeA: SCAN + TYPE
+NodeA --> Cluster: keys and types
+Cluster -> NodeB: SCAN + TYPE
+NodeB --> Cluster: keys and types
+Cluster --> UI: merged unique key list
+
+== Команды консоли ==
+"Пользователь" -> Console: Ввести команду
+Console -> UI: execute_console_command()
+
+alt KEYS / SCAN / INFO / DBSIZE / FLUSH*
+  UI -> Cluster: специальная обработка cluster-команд
+  Cluster -> NodeA: выполнить на master
+  Cluster -> NodeB: выполнить на master
+  Cluster --> UI: aggregated result
+else Обычная команда
+  UI -> Cluster: execute_command(cmd, args)
+  Cluster --> UI: result
+end
+
+UI --> Console: formatted output
+
+@enduml

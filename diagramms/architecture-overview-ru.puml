@@ -1,0 +1,65 @@
+@startuml
+title Redis Commander TUI - Общая архитектура
+
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+package "Точка входа CLI" {
+  [main()]
+  [argparse]
+}
+
+package "Ядро приложения" {
+  [RedisCommanderUI]
+  [ConnectionProfile]
+  [RedisConnection]
+}
+
+package "Компоненты UI" {
+  [KeyListView]
+  [KeyListItem]
+  [AddKeyDialog]
+  [CommandPromptWrapper]
+  [ScrollBar]
+}
+
+package "Источники профилей" {
+  [Обычный JSON]
+  [Зашифрованный конфиг]
+  [HashiCorp Vault]
+}
+
+package "Внешние системы" {
+  [Redis Standalone]
+  [Redis Cluster]
+  [Файловая система]
+  [Audit Log]
+}
+
+[main()] --> [argparse]
+[argparse] --> [RedisCommanderUI]
+
+[RedisCommanderUI] --> [ConnectionProfile]
+[RedisCommanderUI] --> [RedisConnection]
+[RedisCommanderUI] --> [KeyListView]
+[RedisCommanderUI] --> [AddKeyDialog]
+[RedisCommanderUI] --> [CommandPromptWrapper]
+[RedisCommanderUI] --> [ScrollBar]
+
+[KeyListView] --> [KeyListItem]
+[AddKeyDialog] --> [RedisConnection]
+
+[RedisCommanderUI] --> [Обычный JSON]
+[RedisCommanderUI] --> [Зашифрованный конфиг]
+[RedisCommanderUI] --> [HashiCorp Vault]
+
+[Обычный JSON] --> [Файловая система]
+[Зашифрованный конфиг] --> [Файловая система]
+[HashiCorp Vault] --> [Файловая система]
+
+[RedisConnection] --> [Redis Standalone]
+[RedisConnection] --> [Redis Cluster]
+[RedisCommanderUI] --> [Audit Log]
+[Audit Log] --> [Файловая система]
+
+@enduml

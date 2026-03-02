@@ -1,0 +1,44 @@
+@startuml
+title Redis Commander TUI - Работа с ключами в UI
+
+actor User as "Пользователь"
+participant "RedisCommanderUI" as UI
+participant "KeyListView" as KeyList
+participant "AddKeyDialog" as Dialog
+participant "RedisConnection" as Conn
+participant "Redis Client" as Redis
+
+"Пользователь" -> UI: Выбрать профиль / БД
+UI -> Conn: connect_to_profile() / select_db()
+UI -> Redis: refresh_keys()
+Redis --> UI: keys with types
+UI -> KeyList: set_keys(keys_with_types)
+
+"Пользователь" -> KeyList: Выбрать ключ
+KeyList -> UI: key_selected(key)
+UI -> Redis: display_key_details(key)
+Redis --> UI: metadata + value
+
+alt Добавление ключа
+  "Пользователь" -> UI: Нажать F3
+  UI -> Dialog: show_add_key_dialog()
+  "Пользователь" -> Dialog: Ввести тип, значение, TTL
+  Dialog -> Redis: on_save()
+  Redis --> Dialog: OK
+  Dialog -> UI: on_success()
+  UI -> Redis: refresh_keys()
+else Редактирование ключа
+  "Пользователь" -> UI: Нажать F4
+  UI -> Dialog: show_edit_key_dialog()
+  Dialog -> Redis: load_key_data()
+  Redis --> Dialog: current value
+  "Пользователь" -> Dialog: Изменить значение
+  Dialog -> Redis: on_save()
+  UI -> Redis: refresh_keys()
+else Удаление ключа
+  "Пользователь" -> UI: Нажать Delete Key / F8
+  UI -> Redis: delete_key() / delete_marked_keys()
+  UI -> Redis: refresh_keys()
+end
+
+@enduml

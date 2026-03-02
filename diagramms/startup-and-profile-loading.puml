@@ -1,0 +1,40 @@
+@startuml
+title Redis Commander TUI - Startup and Profile Loading
+
+actor User
+participant "main()" as Main
+participant "argparse" as Argparse
+participant "RedisCommanderUI" as UI
+participant "load_profiles()" as Loader
+participant "Plain JSON" as Json
+participant "Encrypted Config" as Enc
+participant "Vault" as Vault
+participant "_parse_profiles()" as Parse
+participant "validate_profiles()" as Validate
+participant "connect_to_profile()" as Connect
+
+User -> Main: Run application
+Main -> Argparse: Parse CLI arguments
+Argparse --> Main: args
+Main -> UI: RedisCommanderUI(args)
+UI -> Loader: load_profiles()
+
+alt --vault-url provided
+  Loader -> Vault: _load_from_vault()
+  Vault --> Loader: profiles_data
+else --encrypted-config provided
+  Loader -> Enc: _load_encrypted_config()
+  Enc --> Loader: profiles_data
+else default mode
+  Loader -> Json: _load_plaintext_config()
+  Json --> Loader: profiles_data
+end
+
+Loader -> Parse: _parse_profiles(profiles_data)
+Parse --> UI: profiles
+UI -> Validate: validate_profiles()
+Validate --> UI: validated profiles
+UI -> Connect: connect_to_profile(first_profile)
+Connect --> UI: current connection
+
+@enduml

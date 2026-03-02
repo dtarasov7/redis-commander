@@ -1,0 +1,65 @@
+@startuml
+title Redis Commander TUI - Architecture Overview
+
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+package "CLI Entry" {
+  [main()]
+  [argparse]
+}
+
+package "Application Core" {
+  [RedisCommanderUI]
+  [ConnectionProfile]
+  [RedisConnection]
+}
+
+package "UI Components" {
+  [KeyListView]
+  [KeyListItem]
+  [AddKeyDialog]
+  [CommandPromptWrapper]
+  [ScrollBar]
+}
+
+package "Profile Sources" {
+  [Plain JSON]
+  [Encrypted Config]
+  [HashiCorp Vault]
+}
+
+package "External Services" {
+  [Redis Standalone]
+  [Redis Cluster]
+  [Filesystem]
+  [Audit Log]
+}
+
+[main()] --> [argparse]
+[argparse] --> [RedisCommanderUI]
+
+[RedisCommanderUI] --> [ConnectionProfile]
+[RedisCommanderUI] --> [RedisConnection]
+[RedisCommanderUI] --> [KeyListView]
+[RedisCommanderUI] --> [AddKeyDialog]
+[RedisCommanderUI] --> [CommandPromptWrapper]
+[RedisCommanderUI] --> [ScrollBar]
+
+[KeyListView] --> [KeyListItem]
+[AddKeyDialog] --> [RedisConnection]
+
+[RedisCommanderUI] --> [Plain JSON]
+[RedisCommanderUI] --> [Encrypted Config]
+[RedisCommanderUI] --> [HashiCorp Vault]
+
+[Plain JSON] --> [Filesystem]
+[Encrypted Config] --> [Filesystem]
+[HashiCorp Vault] --> [Filesystem]
+
+[RedisConnection] --> [Redis Standalone]
+[RedisConnection] --> [Redis Cluster]
+[RedisCommanderUI] --> [Audit Log]
+[Audit Log] --> [Filesystem]
+
+@enduml

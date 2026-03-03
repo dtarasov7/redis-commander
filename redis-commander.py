@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-Redis Commander TUI - Terminal User Interface 
-Полная функциональность: просмотр ключей, выполнение команд, добавление ключей
-"""
+"""Redis Commander TUI main application module."""
 
 import urwid
 # import redis
@@ -29,6 +26,12 @@ try:
 except ImportError:
     HAS_CRYPTO = False
 
+try:
+    import hvac
+    HAS_HVAC = True
+except ImportError:
+    HAS_HVAC = False
+
 
 __version__ = "1.0.0"
 __author__ = "Tarasov Dmitry"
@@ -43,14 +46,31 @@ logger = logging.getLogger('redis-commander')
 
 
 class ConnectionProfile:
-    """Профиль подключения к Redis"""
+    """Store Redis connection settings for standalone or cluster mode."""
     def __init__(self, name: str, host: str = 'localhost', port: int = 6379,
              password: Optional[str] = None, username: Optional[str] = None,
              ssl: bool = False, ssl_ca_certs: Optional[str] = None,
              ssl_certfile: Optional[str] = None, ssl_keyfile: Optional[str] = None,
              socket_path: Optional[str] = None, readonly: bool = False,
              cluster_mode: bool = False,
-             cluster_nodes: Optional[List[Tuple[str, int]]] = None):  # Ноды для кластера
+             cluster_nodes: Optional[List[Tuple[str, int]]] = None):
+        """Initialize a Redis connection profile.
+
+        Args:
+            name (str): Profile display name.
+            host (str): Redis host name or IP address.
+            port (int): Redis TCP port.
+            password (Optional[str]): Redis password, if required.
+            username (Optional[str]): Redis ACL username, if required.
+            ssl (bool): Enable TLS for the connection.
+            ssl_ca_certs (Optional[str]): Path to the CA certificate bundle.
+            ssl_certfile (Optional[str]): Path to the client certificate.
+            ssl_keyfile (Optional[str]): Path to the client private key.
+            socket_path (Optional[str]): Unix socket path for local connections.
+            readonly (bool): UI-level read-only flag for the profile.
+            cluster_mode (bool): Treat the profile as a Redis Cluster endpoint.
+            cluster_nodes (Optional[List[Tuple[str, int]]]): Seed nodes for cluster mode.
+        """
         self.name = name
         self.host = host
         self.port = port
@@ -66,6 +86,11 @@ class ConnectionProfile:
         self.cluster_nodes = cluster_nodes or [(host, port)]
 
     def to_dict(self) -> Dict:
+        """Return a minimal serializable representation of the profile.
+
+        Returns:
+            Dict: Basic fields used for display or export.
+        """
         return {
             'name': self.name,
             'host': self.host,
@@ -76,7 +101,7 @@ class ConnectionProfile:
 
 
 class RedisConnection:
-    """Менеджер подключений к Redis"""
+    """Manage a single Redis standalone or cluster connection."""
 
     def __init__(self, profile: ConnectionProfile):
         self.profile = profile
@@ -88,7 +113,11 @@ class RedisConnection:
         self.is_cluster = profile.cluster_mode
 
     def connect(self) -> Tuple[bool, str]:
-        """Подключение к Redis или Redis Cluster"""
+        """Open the configured Redis connection.
+
+        Returns:
+            Tuple[bool, str]: Success flag and status message.
+        """
         try:
             if self.profile.cluster_mode:
                 return self._connect_cluster()
@@ -100,8 +129,11 @@ class RedisConnection:
             return False, str(e)
 
     def _connect_standalone(self) -> Tuple[bool, str]:
-        """Подключение к standalone Redis"""
-        """Подключение к Redis"""
+        """Connect to a standalone Redis server.
+
+        Returns:
+            Tuple[bool, str]: Success flag and status message.
+        """
         try:
             kwargs = {
                 'db': 0,  # Всегда начинаем с DB0
@@ -146,7 +178,11 @@ class RedisConnection:
             return False, str(e)
 
     def _connect_cluster(self) -> Tuple[bool, str]:
-        """Подключение к Redis Cluster - простая версия"""
+        """Connect to a Redis Cluster using the configured seed node.
+
+        Returns:
+            Tuple[bool, str]: Success flag and status message.
+        """
         try:
             # Просто передаем список узлов как есть
             kwargs = {
@@ -196,13 +232,24 @@ class RedisConnection:
 
     @property
     def active_client(self):
-        """Возвращает активный клиент"""
+        """Return the active standalone or cluster client.
+
+        Returns:
+            Any: Client instance used for Redis operations.
+        """
         if self.is_cluster:
             return self.cluster_client
         return self.client
 
     def select_db(self, db: int) -> Tuple[bool, str]:
-        """Переключение на другую базу данных (не поддерживается в кластере)"""
+        """Switch the standalone connection to another logical database.
+
+        Args:
+            db (int): Redis database index to select.
+
+        Returns:
+            Tuple[bool, str]: Success flag and status message.
+        """
         if self.is_cluster:
             return False, "Redis Cluster supports only DB0"
 
@@ -219,6 +266,7 @@ class RedisConnection:
             return False, str(e)
 
     def disconnect(self):
+        """Close the active client connection if it exists."""
         if self.client:
             self.client.close()
             self.connected = False
@@ -226,15 +274,16 @@ class RedisConnection:
 
 
 class KeyListItem(urwid.WidgetWrap):
-    """Элемент списка ключей с поддержкой выделения"""
+    """Render one selectable key row with type and mark state."""
 
     def __init__(self, key: bytes, key_type: str, on_select_callback, marked: bool = False):
-        """
+        """Initialize the key row widget.
+
         Args:
-            key: ключ (bytes)
-            key_type: тип ключа (string, hash, list, etc)
-            on_select_callback: функция для вызова при выборе ключа
-            marked: отмечен ли элемент
+            key (bytes): Raw Redis key.
+            key_type (str): Redis type name for the key.
+            on_select_callback: Callback invoked when the item is activated.
+            marked (bool): Initial bulk-mark state.
         """
         self.key = key
         self.key_type = key_type
@@ -271,12 +320,12 @@ class KeyListItem(urwid.WidgetWrap):
         super().__init__(self.text_widget)
 
     def toggle_mark(self):
-        """Переключить отметку"""
+        """Toggle the bulk-mark state for this item."""
         self.marked = not self.marked
         self.update_display()
 
     def update_display(self):
-        """Обновить отображение"""
+        """Refresh the rendered text after state changes."""
         type_icons = {
             'string': '[St]',
             'hash': '[Hs]',
@@ -308,7 +357,7 @@ class KeyListItem(urwid.WidgetWrap):
 
 
 class KeyListView(urwid.WidgetWrap):
-    """Виртуализированный список ключей с фильтрацией и кешированием"""
+    """Display, filter, and bulk-mark the loaded key set."""
 
     signals = ['key_selected']
 
@@ -337,7 +386,11 @@ class KeyListView(urwid.WidgetWrap):
         super().__init__(pile)
 
     def set_keys(self, keys_with_types: List[Tuple[bytes, str]]):
-        """Установить список ключей (с типами)"""
+        """Replace the current key collection and refresh the list view.
+
+        Args:
+            keys_with_types (List[Tuple[bytes, str]]): Keys paired with detected Redis types.
+        """
         logger.info(f"KeyListView.set_keys called with {len(keys_with_types)} keys")
         self.all_keys = keys_with_types
         self.filtered_keys = keys_with_types.copy()
@@ -347,7 +400,11 @@ class KeyListView(urwid.WidgetWrap):
         logger.info("KeyListView.set_keys completed")
 
     def apply_filter(self, pattern: Optional[str]):
-        """Применить фильтр по паттерну"""
+        """Apply or clear a glob filter on the loaded keys.
+
+        Args:
+            pattern (Optional[str]): Glob pattern or None to clear the filter.
+        """
         self.filter_pattern = pattern
 
         if not pattern:
@@ -373,7 +430,7 @@ class KeyListView(urwid.WidgetWrap):
         self.refresh_display()
 
     def refresh_display(self):
-        """Обновить отображение списка"""
+        """Rebuild the visible list from the current filtered key set."""
         logger.info(f"KeyListView.refresh_display called, filtered_keys: {len(self.filtered_keys)}")
 
         self.walker.clear()
@@ -415,7 +472,7 @@ class KeyListView(urwid.WidgetWrap):
         logger.info("KeyListView.refresh_display completed")
 
     def update_header(self):
-        """Обновить заголовок с информацией"""
+        """Update the list header with counts and active filter state."""
         total = len(self.all_keys)
         filtered = len(self.filtered_keys)
         marked = len(self.marked_keys)
@@ -431,7 +488,11 @@ class KeyListView(urwid.WidgetWrap):
         self.header.set_text(text)
 
     def on_key_selected(self, key):
-        """Обработчик выбора ключа"""
+        """Forward a selected key through the widget signal.
+
+        Args:
+            key: Raw Redis key selected in the list.
+        """
         logger.info(f"KeyListView.on_key_selected called")
         logger.info(f"Type of 'key': {type(key)}")
         logger.info(f"Value of 'key': {key}")
@@ -446,18 +507,30 @@ class KeyListView(urwid.WidgetWrap):
             logger.error(f"emit_signal failed: {e}", exc_info=True)
 
     def get_focused_key(self) -> Optional[bytes]:
-        """Получить ключ в фокусе"""
+        """Return the key currently focused in the list.
+
+        Returns:
+            Optional[bytes]: Focused key or None when nothing is selected.
+        """
         focus_widget, focus_pos = self.walker.get_focus()
         if focus_widget and isinstance(focus_widget.base_widget, KeyListItem):
             return focus_widget.base_widget.key
         return None
 
     def get_marked_keys(self) -> List[bytes]:
-        """Получить список отмеченных ключей"""
+        """Return all keys marked for a bulk operation.
+
+        Returns:
+            List[bytes]: Marked Redis keys.
+        """
         return list(self.marked_keys)
 
     def mark_by_pattern(self, pattern: str):
-        """Отметить ключи по паттерну"""
+        """Bulk-mark keys whose names match a glob pattern.
+
+        Args:
+            pattern (str): Glob pattern used to match loaded keys.
+        """
         import fnmatch
         pattern_lower = pattern.lower()
 
@@ -472,12 +545,12 @@ class KeyListView(urwid.WidgetWrap):
         self.refresh_display()
 
     def unmark_all(self):
-        """Снять все отметки"""
+        """Clear all bulk marks in the current key set."""
         self.marked_keys.clear()
         self.refresh_display()
 
     def toggle_mark_focused(self):
-        """Переключить отметку на текущем элементе"""
+        """Toggle the mark on the focused item and advance focus."""
         focus_widget, focus_pos = self.walker.get_focus()
         if focus_widget and isinstance(focus_widget.base_widget, KeyListItem):
             item = focus_widget.base_widget
@@ -495,7 +568,7 @@ class KeyListView(urwid.WidgetWrap):
 
 
 class CommandPromptWrapper(urwid.WidgetWrap):
-    """Обертка для Edit с перехватом стрелок вверх/вниз"""
+    """Wrap the console prompt to support history navigation and execution."""
 
     def __init__(self, edit_widget, on_up, on_down, on_enter):
         self.edit_widget = edit_widget
@@ -505,11 +578,11 @@ class CommandPromptWrapper(urwid.WidgetWrap):
         super().__init__(edit_widget)
 
     def selectable(self):
-        """Виджет может получать фокус"""
+        """Report that the prompt widget can receive focus."""
         return True
 
     def keypress(self, size, key):
-        """Перехватываем клавиши"""
+        """Handle prompt-specific keys before delegating to the edit widget."""
         if key == 'ctrl p' or key == 'page up':
             # ✅ Вызываем callback и возвращаем None (обработано)
             self.on_up()
@@ -528,7 +601,7 @@ class CommandPromptWrapper(urwid.WidgetWrap):
 
 
 class AddKeyDialog(urwid.WidgetWrap):
-    """Диалог добавления/редактирования ключа"""
+    """Collect and validate data for creating or editing a Redis key."""
     signals = ['close']
 
     def __init__(self, connection: RedisConnection, on_success_callback, edit_key=None):
@@ -624,7 +697,11 @@ class AddKeyDialog(urwid.WidgetWrap):
             self.update_value_widget('string')
 
     def load_key_data(self, key):
-        """Загрузить данные существующего ключа для редактирования"""
+        """Load the current key value into the edit form.
+
+        Args:
+            key: Redis key to preload into the dialog.
+        """
         try:
             client = self.connection.active_client
 
@@ -728,7 +805,7 @@ class AddKeyDialog(urwid.WidgetWrap):
         return result
 
     def request_close(self):
-        """Запрос на закрытие с проверкой изменений"""
+        """Close the dialog or confirm when there are unsaved changes."""
         if self.value_changed:
             self.show_confirm_dialog(
                 "Discard changes?",
@@ -740,7 +817,7 @@ class AddKeyDialog(urwid.WidgetWrap):
             self._emit('close')
 
     def on_type_changed(self, button, new_state, type_name):
-        """Обработчик изменения типа с подтверждением"""
+        """Handle Redis type changes and confirm how to treat existing input."""
         if not new_state:
             return
 
@@ -766,7 +843,7 @@ class AddKeyDialog(urwid.WidgetWrap):
             self.update_value_widget(type_name)
 
     def change_type_keep_value(self, type_name):
-        """Сменить тип, сохранив значение"""
+        """Switch the form type and keep the current raw input text."""
         old_value = self.get_value_text()
         self.current_type = type_name
         self.update_value_widget(type_name)
@@ -775,13 +852,13 @@ class AddKeyDialog(urwid.WidgetWrap):
             self.value_edit.base_widget.set_edit_text(old_value)
 
     def change_type_clear_value(self, type_name):
-        """Сменить тип, очистив значение"""
+        """Switch the form type and clear the current raw input text."""
         self.current_type = type_name
         self.update_value_widget(type_name)
         self.value_changed = False
 
     def show_confirm_dialog(self, title, message, yes_text="Yes", no_text="No", on_yes=None, on_no=None):
-        """Показать диалог подтверждения"""
+        """Show a modal confirmation dialog inside the editor."""
         yes_btn = urwid.Button(yes_text, on_press=lambda btn: self.close_confirm_dialog(on_yes))
         no_btn = urwid.Button(no_text, on_press=lambda btn: self.close_confirm_dialog(on_no))
 
@@ -808,7 +885,7 @@ class AddKeyDialog(urwid.WidgetWrap):
         self._w = overlay
 
     def close_confirm_dialog(self, callback):
-        """Закрыть диалог подтверждения"""
+        """Close the confirmation overlay and run the selected callback."""
         # Восстанавливаем исходный виджет
         self._w = urwid.AttrMap(
             urwid.LineBox(
@@ -827,7 +904,11 @@ class AddKeyDialog(urwid.WidgetWrap):
             callback()
 
     def update_value_widget(self, key_type):
-        """Обновить виджет для ввода значения в зависимости от типа"""
+        """Rebuild the value editor for the selected Redis type.
+
+        Args:
+            key_type: Redis type currently selected in the dialog.
+        """
         self.current_type = key_type
 
         # Очищаем контейнер
@@ -914,13 +995,21 @@ class AddKeyDialog(urwid.WidgetWrap):
             ])
 
     def get_value_text(self) -> str:
-        """Универсальный метод получения текста из value_edit"""
+        """Return normalized text from the active value editor.
+
+        Returns:
+            str: Trimmed editor content or an empty string.
+        """
         if self.value_edit:
             return self.value_edit.base_widget.get_edit_text().strip()
         return ''
 
     def on_save(self, button):
-        """Сохранение ключа"""
+        """Validate the form and write the key to Redis.
+
+        Args:
+            button: Urwid callback argument for the save button.
+        """
         key = self.key_edit.base_widget.get_edit_text().strip()
         key_type = self.current_type
         ttl_text = self.ttl_edit.base_widget.get_edit_text().strip()
@@ -1077,7 +1166,11 @@ class AddKeyDialog(urwid.WidgetWrap):
             logger.error(f"Failed to save key: {e}", exc_info=True)
 
     def show_error(self, message):
-        """Показать сообщение об ошибке"""
+        """Display an inline validation or save error message.
+
+        Args:
+            message: Error text shown inside the dialog.
+        """
         self.error_text.set_text(('error', f"❌ Error: {message}"))
 
     def on_cancel(self, button):
@@ -1086,11 +1179,13 @@ class AddKeyDialog(urwid.WidgetWrap):
 
 
 class ScrollBar(urwid.WidgetWrap):
-    """Простой индикатор прокрутки для ListBox"""
+    """Draw a lightweight visual scrollbar for a ListBox-based widget."""
 
     def __init__(self, widget):
-        """
-        widget - ListBox или Pile с ListBox внутри
+        """Initialize the scrollbar wrapper.
+
+        Args:
+            widget: ListBox or a container that includes one.
         """
         self.widget = widget
         self.scrollbar_width = 1
@@ -1113,7 +1208,14 @@ class ScrollBar(urwid.WidgetWrap):
         super().__init__(self.columns)
 
     def _find_listbox(self, widget):
-        """Рекурсивно ищем ListBox внутри виджета"""
+        """Recursively locate the first nested ListBox.
+
+        Args:
+            widget: Root widget that may contain a ListBox.
+
+        Returns:
+            Optional[urwid.ListBox]: Located ListBox or None.
+        """
         if isinstance(widget, urwid.ListBox):
             return widget
         elif hasattr(widget, 'original_widget'):
@@ -1126,7 +1228,7 @@ class ScrollBar(urwid.WidgetWrap):
         return None
 
     def render(self, size, focus=False):
-        """Обновляем индикатор при каждой отрисовке"""
+        """Render the wrapped widget and refresh the scrollbar position."""
         maxcol, maxrow = size
 
         if self.listbox is None:
@@ -1185,7 +1287,7 @@ class ScrollBar(urwid.WidgetWrap):
 
 
 class RedisCommanderUI:
-    """Главное окно в стиле Redis Commander"""
+    """Coordinate profile loading, UI state, Redis actions, and console flows."""
 
     palette = [
         ('header', 'white', 'dark blue', 'bold'),
@@ -1216,6 +1318,11 @@ class RedisCommanderUI:
     ]
 
     def __init__(self, args):
+        """Initialize the application, load profiles, and build the UI.
+
+        Args:
+            args: Parsed command-line arguments from argparse.
+        """
         self.connections: Dict[str, RedisConnection] = {}
         self.current_connection: Optional[RedisConnection] = None
         self.args = args
@@ -1258,7 +1365,7 @@ class RedisCommanderUI:
         )
 
     def load_command_history(self):
-        """Загрузить историю команд из файла"""
+        """Load persisted console history from the user history file."""
         history_file = os.path.expanduser('~/.redis_commander_history')
         try:
             if os.path.exists(history_file):
@@ -1269,7 +1376,7 @@ class RedisCommanderUI:
             logger.error(f"Failed to load command history: {e}")
 
     def save_command_history(self):
-        """Сохранить историю команд в файл"""
+        """Persist the most recent console commands to disk."""
         history_file = os.path.expanduser('~/.redis_commander_history')
         try:
             # Сохраняем последние 1000 команд
@@ -1281,7 +1388,11 @@ class RedisCommanderUI:
             logger.error(f"Failed to save command history: {e}")
 
     def add_to_history(self, command: str):
-        """Добавить команду в историю"""
+        """Append a command to history unless it is empty or duplicated.
+
+        Args:
+            command (str): Command text entered in the console.
+        """
         command = command.strip()
         if not command:
             return
@@ -1298,10 +1409,10 @@ class RedisCommanderUI:
         self.save_command_history()
 
     def navigate_history(self, direction: str):
-        """Навигация по истории команд
+        """Move backward or forward in console command history.
 
         Args:
-            direction: 'up' или 'down'
+            direction (str): Either ``up`` or ``down``.
         """
         if not self.command_history:
             return
@@ -1339,7 +1450,14 @@ class RedisCommanderUI:
             self.command_prompt.set_edit_pos(len(command))
 
     def get_key_type_icon(self, key: str) -> str:
-        """Получить иконку для типа ключа (простые символы)"""
+        """Resolve an ASCII icon for the current Redis key type.
+
+        Args:
+            key (str): Redis key name as text.
+
+        Returns:
+            str: Type icon used by the UI.
+        """
 
         # Альтернатива: ASCII символы
         ascii_icons = {
@@ -1374,7 +1492,11 @@ class RedisCommanderUI:
             return icon_set['unknown']
 
     def load_profiles(self) -> Dict[str, ConnectionProfile]:
-        """Загрузка профилей с поддержкой трех режимов"""
+        """Load connection profiles from the selected configuration source.
+
+        Returns:
+            Dict[str, ConnectionProfile]: Parsed connection profiles keyed by name.
+        """
 
         # Определяем режим работы
         if self.args.vault_url:
@@ -1391,7 +1513,14 @@ class RedisCommanderUI:
         return self._parse_profiles(profiles_data)
 
     def _load_plaintext_config(self, config_path: str) -> dict:
-        """Режим 1: Загрузка из обычного JSON файла"""
+        """Load profiles from a plain JSON file.
+
+        Args:
+            config_path (str): Path to the JSON config file.
+
+        Returns:
+            dict: Raw profile data or an empty dict on failure.
+        """
         if not os.path.exists(config_path):
             logger.warning(f"Config file not found: {config_path}")
             return {}
@@ -1407,7 +1536,14 @@ class RedisCommanderUI:
             return {}
 
     def _load_encrypted_config(self, config_path: str) -> dict:
-        """Режим 2: Загрузка из зашифрованного файла"""
+        """Load and decrypt profiles from an encrypted config file.
+
+        Args:
+            config_path (str): Path to the encrypted config file.
+
+        Returns:
+            dict: Raw decrypted profile data.
+        """
         if not os.path.exists(config_path):
             self._exit_error(f"Encrypted config file not found: {config_path}")
 
@@ -1448,7 +1584,14 @@ class RedisCommanderUI:
             self._exit_error(f"Error reading encrypted config: {e}")
 
     def _load_from_vault(self) -> dict:
-        """Режим 3: Загрузка из HashiCorp Vault"""
+        """Load profiles from HashiCorp Vault.
+
+        Returns:
+            dict: Raw profile data returned by Vault.
+        """
+        if not HAS_HVAC:
+            self._exit_error("Vault mode requires the 'hvac' package to be installed")
+
         vault_url = self.args.vault_url
         vault_path = self.args.vault_path
 
@@ -1491,7 +1634,14 @@ class RedisCommanderUI:
             self._exit_error(f"Failed to load from Vault: {e}")
 
     def _parse_profiles(self, data: dict) -> Dict[str, ConnectionProfile]:
-        """Парсинг загруженных данных в объекты ConnectionProfile"""
+        """Normalize raw profile data into ConnectionProfile objects.
+
+        Args:
+            data (dict): Raw profile mapping loaded from the selected source.
+
+        Returns:
+            Dict[str, ConnectionProfile]: Parsed profile objects keyed by name.
+        """
         profiles = {}
 
         for name, config in data.items():
@@ -1577,13 +1727,13 @@ class RedisCommanderUI:
         return profiles
 
     def _exit_error(self, message: str):
-        """Вывод ошибки и выход из программы"""
+        """Print a fatal error message, log it, and terminate the process."""
         print(f"ERROR: {message}", file=sys.stderr)
         logger.error(message)
         sys.exit(1)
 
     def validate_profiles(self):
-        """Валидация загруженных профилей"""
+        """Validate loaded profiles and downgrade invalid cluster entries."""
         for name, profile in self.profiles.items():
             if profile.cluster_mode:
                 # Проверка узлов кластера
@@ -1605,7 +1755,7 @@ class RedisCommanderUI:
         logger.info(f"Validated {len(self.profiles)} profiles")
 
     def create_toolbar(self):
-        """Создание toolbar с кнопками"""
+        """Build the top toolbar row with the main action buttons."""
         return urwid.Columns([
             ('weight', 20, urwid.AttrMap(self.help_btn, 'button', 'button_focus')),
             ('pack', urwid.Text(' ')),
@@ -1625,7 +1775,7 @@ class RedisCommanderUI:
         ], dividechars=0)
 
     def create_ui(self):
-        """Создание интерфейса"""
+        """Construct the main TUI layout, panels, and console widgets."""
         # Header
         header_text = urwid.Text([
             ('header_text', ' ● '),
@@ -1755,7 +1905,7 @@ class RedisCommanderUI:
         self.update_connection_tree()
 
     def toggle_console(self):
-        """Переключение консоли"""
+        """Open or close the bottom console pane."""
         if self.console_mode:
             # Выключаем консоль - показываем основной контент
             self.main_content.contents = [
@@ -1800,7 +1950,7 @@ class RedisCommanderUI:
             self.set_status("Console opened (press F2 to close)")
 
     def execute_console_command(self):
-        """Выполнение команды из консоли с поддержкой кластера"""
+        """Execute the current console command, including cluster-specific logic."""
         if not self.current_connection or not self.current_connection.connected:
             self.console_history.append(urwid.Text(('error', '✗ Not connected to Redis')))
             self.console_history.append(urwid.Divider())
@@ -2282,7 +2432,14 @@ class RedisCommanderUI:
         self.update_connection_tree()
 
     def parse_cluster_info(self, info_string: str) -> dict:
-        """Парсинг результата CLUSTER INFO в словарь"""
+        """Parse ``CLUSTER INFO`` output into a dictionary.
+
+        Args:
+            info_string (str): Raw command output as text or bytes.
+
+        Returns:
+            dict: Parsed key-value pairs from the cluster info payload.
+        """
         result = {}
 
         if isinstance(info_string, bytes):
@@ -2297,7 +2454,11 @@ class RedisCommanderUI:
         return result
 
     def connect_to_profile(self, profile: ConnectionProfile):
-        """Подключение к профилю с поддержкой кластера"""
+        """Connect to a profile or reuse an existing compatible connection.
+
+        Args:
+            profile (ConnectionProfile): Target profile to activate.
+        """
         if profile.cluster_mode:
             # Для кластера используем первый узел для идентификации
             if profile.cluster_nodes:
@@ -2370,7 +2531,12 @@ class RedisCommanderUI:
             self.set_status(f"Connection failed: {message}", 'error')
 
     def on_db_select(self, button, data: Tuple[str, int]):
-        """Выбор базы данных"""
+        """Handle database selection from the connection tree.
+
+        Args:
+            button: Urwid callback argument for the pressed button.
+            data (Tuple[str, int]): Profile name and selected database index.
+        """
         profile_name, db_num = data
 
         conn = self.connections.get(profile_name)
@@ -2400,7 +2566,7 @@ class RedisCommanderUI:
                 self.set_status(f"Failed to switch DB: {message}", 'error')
 
     def disconnect(self):
-        """Отключение от текущего сервера"""
+        """Disconnect the current profile and clear active UI state."""
         if self.current_connection:
             name = self.current_connection.profile.name
             self.current_connection.disconnect()
@@ -2414,7 +2580,14 @@ class RedisCommanderUI:
         raise urwid.ExitMainLoop()
 
     def get_cluster_master_nodes(self, client):
-        """Безопасное получение мастер-нод кластера"""
+        """Return master nodes from a cluster client using several fallbacks.
+
+        Args:
+            client: Cluster-capable Redis client.
+
+        Returns:
+            list: Master node handles that can be scanned directly.
+        """
         try:
             # Способ 1: совместимый с redis-py-cluster >= 2.1.0
             if hasattr(client, 'get_primaries'):
@@ -2474,7 +2647,7 @@ class RedisCommanderUI:
             return []
 
     def refresh_keys(self):
-        """Обновление списка ключей"""
+        """Scan the active database or cluster and refresh the key list."""
         if not self.current_connection or not self.current_connection.connected:
             self.key_list_view.set_keys([])
             return
@@ -2541,11 +2714,10 @@ class RedisCommanderUI:
             logger.error(f"Error loading keys: {e}")
 
     def on_key_select(self, key: bytes):
-        """Обработчик выбора ключа
+        """Store the selected key and update the details pane.
 
         Args:
-            widget: KeyListView - источник сигнала (добавляется urwid)
-            key: bytes - выбранный ключ
+            key (bytes): Selected Redis key.
         """
         logger.info(f"UI: Key selected: {key}")
 
@@ -2556,11 +2728,22 @@ class RedisCommanderUI:
         self.display_key_details(self.current_key)
 
     def get_selected_key(self) -> Optional[bytes]:
-        """Получить выбранный ключ"""
+        """Return the currently focused key from the key list.
+
+        Returns:
+            Optional[bytes]: Selected key or None.
+        """
         return self.key_list_view.get_focused_key()
 
     def _scan_cluster_keys_with_types_iter(self, client) -> List[Tuple[bytes, str]]:
-        """Сканирование ключей в Redis Cluster с получением их типов"""
+        """Scan cluster master nodes and resolve key types.
+
+        Args:
+            client: Cluster-capable Redis client.
+
+        Returns:
+            List[Tuple[bytes, str]]: Unique keys paired with detected Redis types.
+        """
         keys_with_types = []
         self.key_count = 0
 
@@ -2688,7 +2871,17 @@ class RedisCommanderUI:
         return unique_keys
 
     def _scan_node(self, node_conn, cursor: int, match: str, count: int):
-        """Выполнить SCAN на конкретном узле кластера"""
+        """Execute a SCAN command directly against one cluster node.
+
+        Args:
+            node_conn: Node-level Redis connection.
+            cursor (int): Scan cursor to continue from.
+            match (str): Match pattern for SCAN.
+            count (int): Requested batch size.
+
+        Returns:
+            Tuple[int, list]: Next cursor and keys returned by the node.
+        """
         args = ['SCAN', cursor]
 
         if match:
@@ -2704,7 +2897,11 @@ class RedisCommanderUI:
         return new_cursor, keys
 
     def display_key_details(self, key: bytes):
-        """Отображение деталей ключа с поддержкой кластера"""
+        """Render metadata and value details for the selected key.
+
+        Args:
+            key (bytes): Redis key to inspect.
+        """
         if not self.current_connection or not self.current_connection.connected:
             return
 
@@ -2910,7 +3107,7 @@ class RedisCommanderUI:
             ]
 
     def debug_cluster_info(self):
-        """Отладочная информация о кластере"""
+        """Collect diagnostic information about the active cluster client."""
         if not self.current_connection or not self.current_connection.is_cluster:
             return
 
@@ -2977,7 +3174,11 @@ class RedisCommanderUI:
             logger.error(f"Debug failed: {e}")
 
     def delete_key(self, key: bytes):
-        """Удаление ключа с поддержкой кластера"""
+        """Delete a single Redis key and refresh the UI.
+
+        Args:
+            key (bytes): Redis key to delete.
+        """
         if not self.current_connection:
             return
 
@@ -2998,7 +3199,7 @@ class RedisCommanderUI:
             logger.error(f"Delete failed for key {key}: {e}")
 
     def update_tabs(self):
-        """Обновление табов"""
+        """Refresh footer tabs with the current connection summary."""
         tabs = []
 
         if self.current_connection and self.current_connection.connected:
@@ -3033,7 +3234,7 @@ class RedisCommanderUI:
         self.tab_text.set_text(tabs if tabs else '')
 
     def _find_listbox_in_ui(self):
-        """Найти ListBox в структуре UI"""
+        """Locate the primary ListBox inside the current UI tree."""
         try:
             # Проверяем main_frame
             if hasattr(self, 'main_frame'):
@@ -3069,7 +3270,7 @@ class RedisCommanderUI:
             return None
 
     def _find_listbox_recursive(self, widget, depth=0):
-        """Рекурсивный поиск ListBox"""
+        """Recursively search for a nested ListBox in a widget tree."""
         if depth > 10:
             return None
 
@@ -3106,7 +3307,11 @@ class RedisCommanderUI:
         return None
 
     def show_edit_key_dialog(self, key):
-        """Показать диалог редактирования ключа"""
+        """Open the edit dialog for an existing key.
+
+        Args:
+            key: Redis key name to edit.
+        """
 
         def on_success():
             self.refresh_keys()
@@ -3132,7 +3337,7 @@ class RedisCommanderUI:
         self.loop.widget = overlay
 
     def show_add_key_dialog(self):
-        """Диалог добавления ключа"""
+        """Open the dialog for creating a new key."""
         if not self.current_connection or not self.current_connection.connected:
             self.set_status("Not connected", 'error')
             return
@@ -3152,7 +3357,7 @@ class RedisCommanderUI:
         self.loop.widget = overlay
 
     def show_mark_pattern_dialog(self):
-        """Диалог отметки ключей по шаблону"""
+        """Open the dialog used to bulk-mark keys by pattern."""
         edit = urwid.Edit('Pattern (* and ? wildcards): ')
 
         def on_mark(button):
@@ -3195,7 +3400,7 @@ class RedisCommanderUI:
         self.loop.widget = overlay
 
     def show_filter_dialog(self):
-        """Диалог фильтрации ключей"""
+        """Open the dialog used to filter the loaded key list."""
         edit = urwid.Edit('Filter pattern (* for wildcard): ')
 
         def on_apply(button):
@@ -3215,7 +3420,7 @@ class RedisCommanderUI:
 
         apply_btn = urwid.Button('Apply', on_press=on_apply)
         clear_btn = urwid.Button('Clear', on_press=on_clear)
-        cancel_btn = urwid.Button('Cancel', on_press=self.close_dialog(None))
+        cancel_btn = urwid.Button('Cancel', on_press=lambda button: self.close_dialog(button))
 
         pile = urwid.Pile([
             edit,
@@ -3241,7 +3446,7 @@ class RedisCommanderUI:
         self.loop.widget = overlay
 
     def delete_marked_keys(self):
-        """Удалить отмеченные ключи"""
+        """Delete all currently marked keys after confirmation."""
         marked = self.key_list_view.get_marked_keys()
 
         if not marked:
@@ -3269,7 +3474,7 @@ class RedisCommanderUI:
 
         text = urwid.Text(f"Delete {len(marked)} marked keys?")
         yes_btn = urwid.Button('Yes', on_press=on_confirm)
-        no_btn = urwid.Button('No', on_press=self.close_dialog(None))
+        no_btn = urwid.Button('No', on_press=lambda button: self.close_dialog(button))
 
         pile = urwid.Pile([
             text,
@@ -3294,20 +3499,25 @@ class RedisCommanderUI:
         self.loop.widget = overlay
 
     def on_key_added(self):
-        """Ключ добавлен"""
+        """Handle a successful add-key workflow and refresh the UI."""
         self.set_status("Key added successfully", 'success')
         self.refresh_keys()
 
     def close_dialog(self, button):
-        """Закрыть диалог и вернуться к основному экрану
+        """Close an overlay dialog and restore the main frame.
 
         Args:
-            button: кнопка или None (urwid передает button при callback)
+            button: Urwid callback argument or None.
         """
         self.loop.widget = self.main_frame
 
     def set_status(self, message: str, style: str = 'footer'):
-        """Установка статуса"""
+        """Update the footer status line.
+
+        Args:
+            message (str): Status text shown to the user.
+            style (str): Palette entry used to render the status line.
+        """
         self.status_text.set_text((style, f" {message}"))
 
     def edit_key_wrapper(self):
@@ -3322,7 +3532,7 @@ class RedisCommanderUI:
                 self.set_status("No key selected")
 
     def handle_input(self, key):
-        """Обработка клавиш"""
+        """Dispatch global keyboard shortcuts for the main UI."""
         # ✅ Tab - переключение между панелями
         if key == 'tab':
             try:
@@ -3407,7 +3617,7 @@ class RedisCommanderUI:
             return
 
     def show_help(self):
-        """Справка"""
+        """Render the built-in help text in the details pane."""
         help_text = """
 Redis Commander TUI - Help
 
@@ -3440,12 +3650,12 @@ Console Mode:
             self.detail_walker.append(urwid.Text(line))
 
     def run(self):
-        """Запуск"""
+        """Start the Urwid main loop."""
         self.loop.run()
 
 
 def main():
-    """Точка входа"""
+    """Parse CLI arguments, create the app, and start the UI loop."""
     parser = argparse.ArgumentParser(description=f'REDIS Commander - TUI Manager for REDIS ; Version {__version__}')
 
     # Режим 1: Обычный файл (по умолчанию)
@@ -3459,7 +3669,7 @@ def main():
     parser.add_argument('--vault-pass', help='Vault password (will prompt if missing - INSECURE in history)')
 
     args = parser.parse_args()
-    print(f'REDIS Commander - TUI Manager for REDIS ; Version {__VERSION__}')
+    print(f'REDIS Commander - TUI Manager for REDIS ; Version {__version__}')
 
     try:
         app = RedisCommanderUI(args)
@@ -3474,5 +3684,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-

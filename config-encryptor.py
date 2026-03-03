@@ -10,7 +10,15 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
 
 def derive_key(password, salt):
-    """Генерация ключа из пароля и соли"""
+    """Derive a Fernet-compatible key from a password and salt.
+
+    Args:
+        password: User-supplied encryption password.
+        salt: Random salt used for PBKDF2.
+
+    Returns:
+        bytes: URL-safe base64-encoded key material.
+    """
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
@@ -21,6 +29,15 @@ def derive_key(password, salt):
     return base64.urlsafe_b64encode(kdf.derive(password.encode()))
 
 def encrypt_file(input_file, output_file):
+    """Encrypt a JSON config file and write it as salt + ciphertext.
+
+    Args:
+        input_file: Path to the source JSON file.
+        output_file: Path to the encrypted output file.
+
+    Returns:
+        None: Errors are reported to stdout and the function exits early.
+    """
     if not os.path.exists(input_file):
         print(f"Error: Input file '{input_file}' not found.")
         return

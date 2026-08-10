@@ -16,11 +16,18 @@ package "Application Core" {
 }
 
 package "UI Components" {
+  [Profile Selector]
+  [Connection Diagnostics]
   [KeyListView]
   [KeyListItem]
   [AddKeyDialog]
   [CommandPromptWrapper]
   [ScrollBar]
+}
+
+package "Background Loading" {
+  [Cancellable SCAN Workers]
+  [TYPE Pipeline Batches]
 }
 
 package "Profile Sources" {
@@ -31,6 +38,8 @@ package "Profile Sources" {
 
 package "External Services" {
   [Redis Standalone]
+  [Redis Sentinel]
+  [Redis Replicas]
   [Redis Cluster]
   [Filesystem]
   [Audit Log]
@@ -41,6 +50,8 @@ package "External Services" {
 
 [RedisCommanderUI] --> [ConnectionProfile]
 [RedisCommanderUI] --> [RedisConnection]
+[RedisCommanderUI] --> [Profile Selector]
+[RedisCommanderUI] --> [Connection Diagnostics]
 [RedisCommanderUI] --> [KeyListView]
 [RedisCommanderUI] --> [AddKeyDialog]
 [RedisCommanderUI] --> [CommandPromptWrapper]
@@ -58,7 +69,11 @@ package "External Services" {
 [HashiCorp Vault] --> [Filesystem]
 
 [RedisConnection] --> [Redis Standalone]
+[RedisConnection] --> [Redis Sentinel] : discover topology
+[RedisConnection] --> [Redis Replicas] : optional reads
 [RedisConnection] --> [Redis Cluster]
+[RedisCommanderUI] --> [Cancellable SCAN Workers]
+[Cancellable SCAN Workers] --> [TYPE Pipeline Batches]
 [RedisCommanderUI] --> [Audit Log]
 [Audit Log] --> [Filesystem]
 

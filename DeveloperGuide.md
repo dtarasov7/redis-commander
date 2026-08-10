@@ -37,16 +37,17 @@ main()
        -> load_profiles()
        -> validate_profiles()
        -> create_ui()
+       -> create_profile_selector_ui()
        -> load_command_history()
-       -> connect_to_profile(first_profile)
        -> urwid.MainLoop(...)
+       -> wait for explicit profile selection
 ```
 
 Current architecture traits:
 
 - main orchestrator: `RedisCommanderUI`
 - one event loop per process
-- one active `current_connection`, while `self.connections` may keep multiple open connections
+- one active `current_connection`; disconnect closes it before profile selection resumes
 - UI components communicate through `urwid.connect_signal(...)` and callback methods
 
 External dependencies:
@@ -246,10 +247,10 @@ Order inside `RedisCommanderUI.__init__()`:
 1. Load profiles through `load_profiles()`
 2. Validate profiles through `validate_profiles()`
 3. Create `KeyListView` and subscribe to `key_selected`
-4. Build the UI with `create_ui()`
-5. Load command history
-6. Auto-connect to the first profile
-7. Create `urwid.MainLoop`
+4. Build the main UI with `create_ui()`
+5. Build the startup selector with `create_profile_selector_ui()`
+6. Load command history
+7. Create `urwid.MainLoop` with the profile selector as its initial widget
 
 ### Profile loading
 
@@ -263,31 +264,40 @@ Order inside `RedisCommanderUI.__init__()`:
 
 - filters supported fields
 - normalizes `cluster_nodes`
+- normalizes Sentinel endpoints and validates Sentinel service/read policies
 - derives `host/port` from the first cluster node if needed
 - creates `ConnectionProfile`
 - falls back to a minimal profile on parse errors
 
-If no profiles exist, it creates:
-
-```python
-ConnectionProfile('localhost', 'localhost', 6379)
-```
+If no profiles exist, the startup selector displays an empty-configuration message
+and keeps the explicit `Exit` action available.
 
 ### Connection flow
 
 `connect_to_profile()`:
 
-- reuses an already open connection when parameters match
-- otherwise creates a new `RedisConnection`
+- creates a new `RedisConnection` after the user presses `Enter` on a profile
+- for Sentinel profiles, discovers master and healthy replicas before opening the UI
 - for cluster connections, tries to read `CLUSTER INFO`
-- after success, calls `refresh_keys()`
+- after success, switches to the main interface and calls `refresh_keys()`
+- after failure, shows secret-free endpoint, TLS/ACL, exception, and troubleshooting details
+
+`disconnect()` closes the connection, clears key/detail state, and restores the
+profile selector. `Exit`/`F10` terminates the program from either interface.
+
+Sentinel profiles pass separate Redis and Sentinel AUTH/TLS settings to
+`RedisClient`. Writes and background key scans use `main_pool`; eligible value
+reads use replica pools according to `read_preference`. Scan failures trigger a
+Sentinel topology refresh. The client retries reads and explicitly rejected
+writes once, but never replays an ambiguous network-interrupted write.
 
 ### Databases
 
-Standalone:
+Standalone and Sentinel:
 
-- supports `DB0-DB15`
-- `get_all_db_key_counts()` performs `SELECT + DBSIZE` for each DB
+- reads the configured database count with `CONFIG GET databases`
+- falls back to the highest DB from `INFO keyspace` and then to 16 databases
+- `get_all_db_key_counts()` reads and caches one `INFO keyspace` response
 
 Cluster:
 
@@ -298,16 +308,17 @@ Cluster:
 
 `refresh_keys()`:
 
-- uses `scan_iter(match='*', count=100)` for standalone
-- uses `_scan_cluster_keys_with_types_iter()` for cluster
-- limits the result with `max_keys = 5000`
+- starts cancellable background scan workers
+- uses node-level `SCAN MATCH * COUNT 1000`
+- resolves types with pipelined `TYPE` batches
+- appends each completed batch to the UI incrementally
+- limits the merged result to `5000` unique keys
 
 Cluster scan:
 
-- tries to use master nodes only
-- performs node-level `SCAN`
-- resolves key type separately for each key
-- merges and deduplicates results
+- scans master nodes in parallel
+- holds one pooled connection per worker
+- merges and deduplicates batches on the UI thread
 
 ### Details pane
 
@@ -421,11 +432,12 @@ The profile loading architecture already supports this:
 
 ### Changing layout
 
-UI is assembled in `create_ui()`. If you add a new pane, update:
+The main UI is assembled in `create_ui()` and the startup screen in
+`create_profile_selector_ui()`. If you add a new pane or screen, update:
 
 - `create_ui()`
 - `toggle_console()`
-- `handle_input()` so `Tab` focus still works
+- `handle_input()` so `Tab`/`Shift+Tab` focus cycling still works
 
 ### Adding hotkeys
 
@@ -439,7 +451,8 @@ UI is assembled in `create_ui()`. If you add a new pane, update:
 
 ### Current state
 
-The repository currently has no automated test suite. The old document contained test examples that did not match the actual module name or code state.
+Regression tests are in `tests/test_performance_paths.py` and cover connection
+pooling, batched scans, DB counts above 16, keyboard focus, and selector/main UI flow.
 
 ### Import caveat
 
@@ -486,24 +499,25 @@ Current optimizations:
 
 1. **5000-key** limit
 2. `SCAN` instead of `KEYS`
-3. `count=100`
-4. `KeyListItem` cache in `key_cache`
-5. trimming console history in the UI
+3. `COUNT 1000` with pipelined `TYPE`
+4. parallel cluster master scanning
+5. incremental list updates from background workers
+6. periodic pool health checks instead of per-command `PING`
+7. cached `INFO keyspace` database counts
+8. `KeyListItem` cache in `key_cache`
+9. trimming console history in the UI
 
-Bottlenecks:
+Remaining limitations:
 
-1. cluster scan is sequential
-2. each key requires a separate `TYPE`
-3. `get_all_db_key_counts()` loops through all `DB0-DB15`
-4. the list is not true virtualization
+1. the list is not true virtualization
+2. the UI intentionally stops after 5000 unique keys
+3. filtering applies to the already loaded key set
 
-Realistic improvements:
+Possible future improvements:
 
-1. parallel cluster scan
-2. lazy type loading
-3. `DBSIZE` caching
-4. paging or incremental loading
-5. clearer separation of scanning and rendering
+1. true paging or a virtualized walker
+2. on-demand type loading for visible rows only
+3. server-side filtering before filling the 5000-key window
 
 ---
 
@@ -622,5 +636,5 @@ Useful near-term improvements:
 ---
 
 **Project author:** Dmitry Tarasov  
-**Code version:** 1.0.0  
+**Code version:** 1.2.0
 **License:** MIT

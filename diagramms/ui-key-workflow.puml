@@ -8,11 +8,14 @@ participant "AddKeyDialog" as Dialog
 participant "RedisConnection" as Conn
 participant "Redis Client" as Redis
 
-User -> UI: Select profile / DB
-UI -> Conn: connect_to_profile() / select_db()
+User -> UI: Select startup profile + Enter
+UI -> Conn: connect_to_profile()
+Conn --> UI: main interface or diagnostics modal
+User -> UI: Select active connection DB
+UI -> Conn: select_db()
 UI -> Redis: refresh_keys()
-Redis --> UI: keys with types
-UI -> KeyList: set_keys(keys_with_types)
+Redis --> UI: background SCAN batches
+UI -> KeyList: append_keys(keys_with_types)
 
 User -> KeyList: Select key
 KeyList -> UI: key_selected(key)
@@ -40,5 +43,9 @@ else Delete key
   UI -> Redis: delete_key() / delete_marked_keys()
   UI -> Redis: refresh_keys()
 end
+
+User -> UI: Disconnect
+UI -> Conn: close active connection
+UI --> User: return to profile selector
 
 @enduml

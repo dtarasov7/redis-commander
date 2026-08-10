@@ -19,13 +19,13 @@
 
 ## Introduction
 
-**Redis Commander TUI** is a terminal user interface for Redis Standalone and Redis Cluster. The application lets you connect to multiple servers, switch databases, browse keys, edit values, run Redis commands, and load connection profiles from plain JSON, an encrypted file, or HashiCorp Vault.
+**Redis Commander TUI** is a terminal interface for Redis Standalone, Redis Sentinel, and Redis Cluster. It discovers Sentinel master/replicas, switches databases, browses keys, edits values, runs commands, and loads profiles from plain JSON, encrypted files, or HashiCorp Vault.
 
 ### What the current version supports
 
-- Connections to **Redis Standalone** and **Redis Cluster**
+- Connections to **Redis Standalone**, **Redis Sentinel**, and **Redis Cluster**
 - Multiple connection profiles in one configuration file
-- Switching between **DB0-DB15** in standalone mode
+- Switching across all databases configured on a standalone server
 - Key browsing with detected Redis types
 - Filtering and bulk marking with glob patterns
 - Adding and editing keys of type `string`, `hash`, `list`, `set`, `zset`, `bitmap`, `stream`
@@ -42,6 +42,7 @@ PlantUML source diagrams for the current implementation are available in `diagra
 - `diagramms/startup-and-profile-loading.puml`
 - `diagramms/ui-key-workflow.puml`
 - `diagramms/cluster-scan-and-console.puml`
+- `diagramms/sentinel-connection-and-failover.puml`
 
 Each diagram also has a Russian copy with the `-ru` suffix.
 
@@ -87,7 +88,8 @@ python redis-commander.py
 python redis-commander.py -c redis_profiles.json
 ```
 
-If the config file is missing or empty, the application creates a temporary `localhost:6379` profile.
+If the config file is missing or empty, the selector shows that no profiles were
+found. Add a profile to the configuration or choose `Exit`.
 
 #### Mode 2: encrypted config
 
@@ -164,6 +166,15 @@ If `--vault-user` or `--vault-pass` is omitted, the application prompts interact
 | `readonly` | boolean | safer browse-only UI mode |
 | `cluster_mode` | boolean | connect as Redis Cluster |
 | `cluster_nodes` | array | cluster node list |
+| `mode` | string | `standalone`, `cluster`, or `sentinel` |
+| `sentinel_service_name` | string | name configured by `sentinel monitor` |
+| `sentinels` | array | Sentinel endpoints; list, string, and object forms are accepted |
+| `read_preference` | string | `master`, `replica_preferred`, or `replica_only` |
+| `replica_selector` | string | `random` or `round_robin` |
+| `sentinel_username`, `sentinel_password` | string/null | separate Sentinel ACL credentials |
+| `sentinel_ssl` | boolean | enable TLS for Sentinel discovery |
+| `sentinel_ssl_ca_certs`, `sentinel_ssl_certfile`, `sentinel_ssl_keyfile` | string | Sentinel TLS files |
+| `sentinel_ssl_check_hostname`, `sentinel_ssl_verify` | boolean | verify Sentinel hostname/certificates |
 
 ### Accepted `cluster_nodes` formats
 
@@ -180,6 +191,34 @@ The application accepts several node formats:
 ```
 
 If `host` and `port` are omitted, the first node from `cluster_nodes` is used for the initial connection.
+
+### Redis Sentinel example
+
+```json
+{
+  "production-sentinel": {
+    "name": "production-sentinel",
+    "mode": "sentinel",
+    "sentinel_service_name": "redis-production",
+    "sentinels": [
+      ["sentinel-1.example.com", 26379],
+      ["sentinel-2.example.com", 26379],
+      ["sentinel-3.example.com", 26379]
+    ],
+    "username": "redis-user",
+    "password": "redis-password",
+    "sentinel_username": "sentinel-user",
+    "sentinel_password": "sentinel-password",
+    "read_preference": "replica_preferred",
+    "replica_selector": "round_robin"
+  }
+}
+```
+
+Writes always use the master reported by Sentinel. Eligible reads follow the
+configured preference and may be stale on replicas. On failover, topology is
+refreshed after connection, `READONLY`, `MASTERDOWN`, or scan errors. Ambiguous
+writes interrupted by the network are not replayed automatically.
 
 ### TLS/SSL example
 
@@ -229,10 +268,11 @@ The script:
 
 ### Screen layout
 
+- Startup screen: configured servers and clusters, plus an explicit `Exit` item
 - Top line: application header
 - Button bar: `F1`, `F2`, `F3`, `F4`, `F8`, `F9`, `F10`, `F11`
 - Left area:
-  - connection and database tree on top
+  - databases of the active server or cluster on top
   - key list below it
 - Right area: selected key details
 - Bottom line: status bar
@@ -240,15 +280,13 @@ The script:
 
 ### Left pane
 
-The left side combines two blocks:
+After a connection succeeds, the left side combines two blocks:
 
-1. Connection profiles
-2. Databases and keys for the active connection
+1. Databases of the active connection
+2. Keys of the selected database
 
 Indicators:
 
-- `●` - active connection
-- `○` - disconnected profile
 - `▪` - active database
 - `▫` - inactive database
 - `[St]` - `string`
@@ -276,7 +314,7 @@ The console opens in the lower part of the screen and contains:
 
 - command and result history
 - the `redis>` input prompt
-- its own focus area, reachable with `Tab`
+- its own focus area, selected automatically when the console opens
 
 ---
 
@@ -284,10 +322,12 @@ The console opens in the lower part of the screen and contains:
 
 ### Selecting a connection and database
 
-1. Select a profile in the connection tree
-2. In standalone mode, choose `DB0` through `DB15`
-3. In Redis Cluster mode, only `DB0` is available
-4. After selection, the application rescans keys automatically
+1. On the startup screen, select a configured profile and press `Enter`
+2. If connection fails, review the diagnostic modal and choose `Retry`, `Back`, or `Exit`
+3. After connection succeeds, choose any database configured on a standalone server
+4. In Redis Cluster mode, only `DB0` is available
+5. After database selection, the application rescans keys automatically
+6. `F9` disconnects completely and returns to the startup profile list
 
 ### Scanning and browsing
 
@@ -506,11 +546,12 @@ For `CROSSSLOT` and `MOVED` errors, the UI prints dedicated messages in the cons
 | `F3` | add a key |
 | `F4` | edit the selected key |
 | `F8` | delete marked keys |
-| `F9` | disconnect from the current server |
+| `F9` | disconnect and return to the profile selector |
 | `F10` | quit the application |
 | `F11` | rescan keys |
 | `F12` | show cluster diagnostic information in the details pane |
-| `Tab` | switch focus between panes |
+| `Tab` | move focus: databases → keys → details |
+| `Shift+Tab` | move focus in the reverse direction |
 | `q` / `Q` | quit the application when the console is closed |
 | `Esc` | close the console or the current dialog |
 
@@ -628,7 +669,7 @@ Yes. The key list is limited to **5000 entries** per scan to keep the UI respons
 
 ### What happens if the config file is missing?
 
-If the JSON file is missing, the application starts with a temporary `localhost:6379` profile.
+If the JSON file is missing, the startup selector reports that no profiles were found.
 
 ### Can it handle binary values?
 
@@ -639,7 +680,7 @@ Yes, but only partially:
 
 ### How do I switch databases?
 
-- in standalone mode, `DB0-DB15` are available
+- in standalone mode, the UI reads the configured database count and supports DB16 and above
 - in cluster mode, only `DB0` is available
 
 ### How should I handle multi-key commands in a cluster?
@@ -700,5 +741,5 @@ Hotkey `F12` shows cluster client diagnostics in the details pane:
 ---
 
 **Author:** Dmitry Tarasov  
-**Code version:** 1.0.0  
+**Code version:** 1.2.0
 **License:** MIT

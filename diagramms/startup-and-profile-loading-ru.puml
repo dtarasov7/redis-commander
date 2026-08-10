@@ -11,7 +11,10 @@ participant "Зашифрованный конфиг" as Enc
 participant "Vault" as Vault
 participant "_parse_profiles()" as Parse
 participant "validate_profiles()" as Validate
+participant "Список профилей" as Selector
 participant "connect_to_profile()" as Connect
+participant "Основной интерфейс" as MainUI
+participant "Окно диагностики" as Diagnostics
 
 "Пользователь" -> Main: Запуск приложения
 Main -> Argparse: Разбор аргументов CLI
@@ -34,7 +37,17 @@ Loader -> Parse: _parse_profiles(profiles_data)
 Parse --> UI: profiles
 UI -> Validate: validate_profiles()
 Validate --> UI: validated profiles
-UI -> Connect: connect_to_profile(first_profile)
-Connect --> UI: current connection
+UI -> Selector: Показать профили из конфигурации
+"Пользователь" -> Selector: Выбор профиля + Enter
+Selector -> Connect: connect_to_profile(profile)
+
+alt подключение успешно
+  Connect -> MainUI: Показать DB и ключи
+  "Пользователь" -> MainUI: Disconnect
+  MainUI -> Selector: Закрыть соединение и вернуться
+else ошибка подключения
+  Connect -> Diagnostics: Безопасная расширенная диагностика
+  Diagnostics -> Selector: Back
+end
 
 @enduml

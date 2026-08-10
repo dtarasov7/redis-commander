@@ -8,11 +8,14 @@ participant "AddKeyDialog" as Dialog
 participant "RedisConnection" as Conn
 participant "Redis Client" as Redis
 
-"Пользователь" -> UI: Выбрать профиль / БД
-UI -> Conn: connect_to_profile() / select_db()
+"Пользователь" -> UI: Выбрать профиль + Enter
+UI -> Conn: connect_to_profile()
+Conn --> UI: основной UI или окно диагностики
+"Пользователь" -> UI: Выбрать DB активного подключения
+UI -> Conn: select_db()
 UI -> Redis: refresh_keys()
-Redis --> UI: keys with types
-UI -> KeyList: set_keys(keys_with_types)
+Redis --> UI: фоновые SCAN-пакеты
+UI -> KeyList: append_keys(keys_with_types)
 
 "Пользователь" -> KeyList: Выбрать ключ
 KeyList -> UI: key_selected(key)
@@ -40,5 +43,9 @@ else Удаление ключа
   UI -> Redis: delete_key() / delete_marked_keys()
   UI -> Redis: refresh_keys()
 end
+
+"Пользователь" -> UI: Disconnect
+UI -> Conn: закрыть активное соединение
+UI --> "Пользователь": возврат к выбору профиля
 
 @enduml

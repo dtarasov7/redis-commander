@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](CHANGELOG.md)
 
 Terminal user interface for Redis Standalone and Redis Cluster.
 
@@ -10,12 +10,15 @@ This project provides a keyboard-driven TUI for browsing keys, inspecting values
 
 ## Features
 
-- Standalone Redis support with `DB0-DB15`
+- Standalone and Redis Sentinel support with the server-configured database count
+- Sentinel master/replica discovery, AUTH/TLS, read preferences, and failover refresh
 - Redis Cluster support with cluster-aware key scanning and console commands
 - Multiple connection profiles loaded from:
   - plain JSON
   - encrypted config file
   - HashiCorp Vault
+- Startup profile selector with explicit connect/disconnect flow
+- Detailed connection-failure diagnostics with retry and back actions
 - Key browsing with filtering and bulk marking
 - Add, edit, and delete workflows for:
   - `string`
@@ -73,6 +76,9 @@ Run the application:
 python redis-commander.py
 ```
 
+Select a configured server or cluster and press `Enter`. A successful connection
+opens the database/key browser; `F9` disconnects and returns to the profile list.
+
 Run with an explicit config path:
 
 ```bash
@@ -124,9 +130,24 @@ python redis-commander.py \
 ## Notes
 
 - The UI scans up to `5000` keys per active database or cluster scan.
+- Key batches are loaded in the background; cluster master nodes are scanned in parallel.
 - In cluster mode, only `DB0` is available.
 - `readonly` is currently a UI-level limitation, not a full write-protection mechanism.
 - `bitmap` and `stream` can be created, but their value rendering and edit preload support are limited compared to the core Redis types.
+
+## Docker Test Stand
+
+Run `./test-stand/seed-data.sh` to start a local Redis container and populate
+DB0 with 5,000 keys and DB1 with 10,000 keys. Connect with:
+
+```bash
+python3 redis-commander.py -c test-stand/redis_profiles.json
+```
+
+See `test-stand/README.md` for details.
+
+The three-node Sentinel integration stand and matching Commander profile are in
+`test-sentinel-stand/`.
 
 ## Architecture Diagrams
 
@@ -136,6 +157,7 @@ PlantUML source diagrams are available in `diagramms/`:
 - `diagramms/startup-and-profile-loading.puml`
 - `diagramms/ui-key-workflow.puml`
 - `diagramms/cluster-scan-and-console.puml`
+- `diagramms/sentinel-connection-and-failover.puml`
 - Russian copies with the `-ru` suffix are provided for each diagram
 
 ## Documentation

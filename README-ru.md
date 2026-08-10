@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](CHANGELOG-rus.md)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](CHANGELOG-rus.md)
 
 Терминальный пользовательский интерфейс для Redis Standalone и Redis Cluster.
 
@@ -10,12 +10,15 @@
 
 ## Возможности
 
-- Поддержка standalone Redis с `DB0-DB15`
+- Поддержка standalone Redis и Redis Sentinel с настроенным на сервере числом DB
+- Обнаружение Sentinel master/replica, AUTH/TLS, политики чтения и failover refresh
 - Поддержка Redis Cluster со cluster-aware сканированием ключей и обработкой команд в консоли
 - Несколько профилей подключения, загружаемых из:
   - обычного JSON
   - зашифрованного файла конфигурации
   - HashiCorp Vault
+- Стартовый экран выбора профиля с явным подключением и отключением
+- Расширенная диагностика ошибок подключения с повтором и возвратом к списку
 - Просмотр ключей с фильтрацией и массовой отметкой
 - Добавление, редактирование и удаление для:
   - `string`
@@ -73,6 +76,10 @@ pip install urwid cryptography hvac
 python redis-commander.py
 ```
 
+Выберите настроенный сервер или кластер и нажмите `Enter`. После успешного
+подключения откроется браузер DB и ключей; `F9` отключает соединение и возвращает
+к списку профилей.
+
 Запуск с явным путем к конфигу:
 
 ```bash
@@ -124,9 +131,24 @@ python redis-commander.py \
 ## Примечания
 
 - UI сканирует до `5000` ключей на активную базу данных или cluster scan.
+- Порции ключей загружаются в фоне; master nodes кластера сканируются параллельно.
 - В cluster mode доступна только `DB0`.
 - `readonly` сейчас является ограничением на уровне UI, а не полным механизмом защиты от записи.
 - `bitmap` и `stream` можно создавать, но их отображение и preload значений при редактировании поддержаны хуже, чем для основных Redis-типов.
+
+## Тестовый стенд в Docker
+
+Команда `./test-stand/seed-data.sh` запускает локальный контейнер Redis и
+наполняет DB0 5 000 ключей, а DB1 — 10 000 ключей. Подключение Commander:
+
+```bash
+python3 redis-commander.py -c test-stand/redis_profiles.json
+```
+
+Подробности находятся в `test-stand/README-ru.md`.
+
+Трёхузловой Sentinel-стенд и готовый профиль Commander находятся в
+`test-sentinel-stand/`.
 
 ## Архитектурные диаграммы
 
@@ -136,6 +158,7 @@ python redis-commander.py \
 - `diagramms/startup-and-profile-loading.puml`
 - `diagramms/ui-key-workflow.puml`
 - `diagramms/cluster-scan-and-console.puml`
+- `diagramms/sentinel-connection-and-failover.puml`
 - для каждой диаграммы есть русская копия с суффиксом `-ru`
 
 ## Документация

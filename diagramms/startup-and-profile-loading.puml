@@ -11,7 +11,10 @@ participant "Encrypted Config" as Enc
 participant "Vault" as Vault
 participant "_parse_profiles()" as Parse
 participant "validate_profiles()" as Validate
+participant "Profile selector" as Selector
 participant "connect_to_profile()" as Connect
+participant "Main interface" as MainUI
+participant "Diagnostics modal" as Diagnostics
 
 User -> Main: Run application
 Main -> Argparse: Parse CLI arguments
@@ -34,7 +37,17 @@ Loader -> Parse: _parse_profiles(profiles_data)
 Parse --> UI: profiles
 UI -> Validate: validate_profiles()
 Validate --> UI: validated profiles
-UI -> Connect: connect_to_profile(first_profile)
-Connect --> UI: current connection
+UI -> Selector: Show configured profiles
+User -> Selector: Select profile + Enter
+Selector -> Connect: connect_to_profile(profile)
+
+alt connection succeeds
+  Connect -> MainUI: Show databases and keys
+  User -> MainUI: Disconnect
+  MainUI -> Selector: Close connection and return
+else connection fails
+  Connect -> Diagnostics: Show safe detailed diagnostics
+  Diagnostics -> Selector: Back
+end
 
 @enduml

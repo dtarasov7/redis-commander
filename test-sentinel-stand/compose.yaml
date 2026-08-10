@@ -1,0 +1,90 @@
+name: redis-commander-sentinel-test
+
+services:
+  redis-1:
+    image: redis:7.4-alpine
+    network_mode: host
+    command: ["redis-server", "--port", "16381", "--save", "", "--appendonly", "no", "--databases", "32"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "16381", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  redis-2:
+    image: redis:7.4-alpine
+    network_mode: host
+    command: ["redis-server", "--port", "16382", "--save", "", "--appendonly", "no", "--databases", "32", "--replicaof", "127.0.0.1", "16381"]
+    depends_on:
+      redis-1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "16382", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  redis-3:
+    image: redis:7.4-alpine
+    network_mode: host
+    command: ["redis-server", "--port", "16383", "--save", "", "--appendonly", "no", "--databases", "32", "--replicaof", "127.0.0.1", "16381"]
+    depends_on:
+      redis-1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "16383", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  sentinel-1:
+    image: redis:7.4-alpine
+    network_mode: host
+    command: ["sh", "-c", "cp /config/sentinel-1.conf /tmp/sentinel.conf && exec redis-sentinel /tmp/sentinel.conf"]
+    volumes:
+      - ./sentinel-1.conf:/config/sentinel-1.conf:ro
+    depends_on:
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26381", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  sentinel-2:
+    image: redis:7.4-alpine
+    network_mode: host
+    command: ["sh", "-c", "cp /config/sentinel-2.conf /tmp/sentinel.conf && exec redis-sentinel /tmp/sentinel.conf"]
+    volumes:
+      - ./sentinel-2.conf:/config/sentinel-2.conf:ro
+    depends_on:
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26382", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  sentinel-3:
+    image: redis:7.4-alpine
+    network_mode: host
+    command: ["sh", "-c", "cp /config/sentinel-3.conf /tmp/sentinel.conf && exec redis-sentinel /tmp/sentinel.conf"]
+    volumes:
+      - ./sentinel-3.conf:/config/sentinel-3.conf:ro
+    depends_on:
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26383", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+

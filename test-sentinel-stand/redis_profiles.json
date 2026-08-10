@@ -1,0 +1,15 @@
+{
+  "docker-sentinel": {
+    "name": "docker-sentinel",
+    "mode": "sentinel",
+    "sentinel_service_name": "redis-production",
+    "sentinels": [
+      ["127.0.0.1", 26381],
+      ["127.0.0.1", 26382],
+      ["127.0.0.1", 26383]
+    ],
+    "read_preference": "replica_preferred",
+    "replica_selector": "round_robin"
+  }
+}
+

@@ -1,0 +1,9 @@
+{
+  "docker-test-redis": {
+    "name": "docker-test-redis",
+    "host": "127.0.0.1",
+    "port": 16379,
+    "cluster_mode": false
+  }
+}
+

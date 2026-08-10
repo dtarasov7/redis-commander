@@ -1,0 +1,37 @@
+@startuml
+title Redis Commander - Sentinel Connection and Failover
+autonumber
+
+actor User
+participant "Profile Selector" as Selector
+participant RedisCommanderUI as UI
+participant RedisClient as Client
+participant "Sentinel 1..N" as Sentinel
+participant "Current Master" as Master
+participant "Healthy Replicas" as Replicas
+
+User -> Selector : select Sentinel profile + Enter
+Selector -> UI : connect_to_profile()
+UI -> Client : Sentinel AUTH/TLS settings
+Client -> Sentinel : discover master + replicas
+Sentinel --> Client : topology
+Client -> Master : PING
+Client --> UI : connected
+UI --> User : DB/key interface
+
+UI -> Master : background SCAN + TYPE pipeline
+UI -> Master : writes and console commands
+UI -> Replicas : eligible value reads
+
+== Failover ==
+Master --> Client : READONLY / MASTERDOWN / connection error
+Client -> Sentinel : refresh topology
+Sentinel --> Client : new master + replicas
+Client -> Client : replace pools
+Client --> UI : retry safe operation or report ambiguous write
+
+User -> UI : Disconnect
+UI -> Client : close all pools
+UI --> Selector : return
+
+@enduml

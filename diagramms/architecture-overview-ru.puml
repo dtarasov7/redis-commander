@@ -16,11 +16,18 @@ package "Ядро приложения" {
 }
 
 package "Компоненты UI" {
+  [Выбор профиля]
+  [Диагностика подключения]
   [KeyListView]
   [KeyListItem]
   [AddKeyDialog]
   [CommandPromptWrapper]
   [ScrollBar]
+}
+
+package "Фоновая загрузка" {
+  [Отменяемые SCAN worker]
+  [Пакеты TYPE pipeline]
 }
 
 package "Источники профилей" {
@@ -31,6 +38,8 @@ package "Источники профилей" {
 
 package "Внешние системы" {
   [Redis Standalone]
+  [Redis Sentinel]
+  [Redis Replica]
   [Redis Cluster]
   [Файловая система]
   [Audit Log]
@@ -41,6 +50,8 @@ package "Внешние системы" {
 
 [RedisCommanderUI] --> [ConnectionProfile]
 [RedisCommanderUI] --> [RedisConnection]
+[RedisCommanderUI] --> [Выбор профиля]
+[RedisCommanderUI] --> [Диагностика подключения]
 [RedisCommanderUI] --> [KeyListView]
 [RedisCommanderUI] --> [AddKeyDialog]
 [RedisCommanderUI] --> [CommandPromptWrapper]
@@ -58,7 +69,11 @@ package "Внешние системы" {
 [HashiCorp Vault] --> [Файловая система]
 
 [RedisConnection] --> [Redis Standalone]
+[RedisConnection] --> [Redis Sentinel] : обнаружение топологии
+[RedisConnection] --> [Redis Replica] : опциональные чтения
 [RedisConnection] --> [Redis Cluster]
+[RedisCommanderUI] --> [Отменяемые SCAN worker]
+[Отменяемые SCAN worker] --> [Пакеты TYPE pipeline]
 [RedisCommanderUI] --> [Audit Log]
 [Audit Log] --> [Файловая система]
 

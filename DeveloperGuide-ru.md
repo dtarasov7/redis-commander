@@ -37,16 +37,17 @@ main()
        -> load_profiles()
        -> validate_profiles()
        -> create_ui()
+       -> create_profile_selector_ui()
        -> load_command_history()
-       -> connect_to_profile(first_profile)
        -> urwid.MainLoop(...)
+       -> ожидание явного выбора профиля
 ```
 
 Особенности текущей архитектуры:
 
 - главный orchestrator: `RedisCommanderUI`
 - один event loop на процесс
-- один `current_connection`, но `self.connections` может держать несколько открытых соединений
+- один активный `current_connection`; при отключении он закрывается до возврата к выбору профиля
 - связь между UI-компонентами идет через `urwid.connect_signal(...)` и callback-методы
 
 Внешние зависимости:
@@ -246,10 +247,10 @@ def main():
 1. Загрузка профилей через `load_profiles()`
 2. Валидация профилей через `validate_profiles()`
 3. Создание `KeyListView` и подписка на `key_selected`
-4. Построение UI через `create_ui()`
-5. Загрузка истории команд
-6. Автоподключение к первому профилю
-7. Создание `urwid.MainLoop`
+4. Построение основного UI через `create_ui()`
+5. Построение стартового экрана через `create_profile_selector_ui()`
+6. Загрузка истории команд
+7. Создание `urwid.MainLoop` со списком профилей в качестве первого экрана
 
 ### Загрузка профилей
 
@@ -263,31 +264,40 @@ def main():
 
 - фильтрует поддерживаемые поля
 - нормализует `cluster_nodes`
+- нормализует Sentinel endpoint и проверяет service/read policy
 - подставляет `host/port` из первого cluster node, если нужно
 - создает `ConnectionProfile`
 - при ошибке делает минимальный fallback profile
 
-Если профилей нет, создается:
-
-```python
-ConnectionProfile('localhost', 'localhost', 6379)
-```
+Если профилей нет, стартовый экран выводит сообщение о пустой конфигурации,
+при этом пункт `Exit` остается доступен.
 
 ### Подключение
 
 `connect_to_profile()`:
 
-- переиспользует уже открытое соединение, если параметры совпадают
-- иначе создает новый `RedisConnection`
+- создает новый `RedisConnection` после нажатия `Enter` на профиле
+- для Sentinel обнаруживает master и работоспособные replica до открытия UI
 - для cluster пытается получить `CLUSTER INFO`
-- после успешного подключения вызывает `refresh_keys()`
+- после успеха открывает основной интерфейс и вызывает `refresh_keys()`
+- после ошибки показывает безопасную диагностику endpoint, TLS/ACL, исключения и рекомендации
+
+`disconnect()` закрывает соединение, очищает ключи и детали и возвращает список
+профилей. `Exit`/`F10` завершает программу из любого интерфейса.
+
+Sentinel-профиль передает в `RedisClient` отдельные Redis и Sentinel AUTH/TLS.
+Записи и фоновый SCAN идут через `main_pool`, разрешенные чтения значений — через
+replica согласно `read_preference`. Ошибка SCAN обновляет Sentinel-топологию.
+Клиент один раз повторяет чтения и явно отклоненные записи, но не повторяет
+запись с неоднозначным результатом после сетевого обрыва.
 
 ### Базы данных
 
-Standalone:
+Standalone и Sentinel:
 
-- доступны `DB0-DB15`
-- `get_all_db_key_counts()` делает `SELECT + DBSIZE` для каждой БД
+- число DB читается через `CONFIG GET databases`
+- fallback: максимальная DB из `INFO keyspace`, затем 16 DB
+- `get_all_db_key_counts()` читает и кэширует один ответ `INFO keyspace`
 
 Cluster:
 
@@ -298,16 +308,17 @@ Cluster:
 
 `refresh_keys()`:
 
-- для standalone использует `scan_iter(match='*', count=100)`
-- для cluster использует `_scan_cluster_keys_with_types_iter()`
-- ограничивает список `max_keys = 5000`
+- запускает отменяемые background scan workers
+- использует node-level `SCAN MATCH * COUNT 1000`
+- определяет типы пакетами через pipeline `TYPE`
+- инкрементально добавляет готовые порции в UI
+- ограничивает объединенный результат 5000 уникальными ключами
 
 Cluster scan:
 
-- пытается брать только master nodes
-- делает node-level `SCAN`
-- для каждого ключа отдельно определяет тип
-- объединяет и дедуплицирует результат
+- параллельно сканирует master nodes
+- удерживает одно pooled connection на worker
+- объединяет и дедуплицирует порции в UI thread
 
 ### Панель деталей
 
@@ -421,11 +432,12 @@ RedisCommanderUI.display_key_details()
 
 ### Изменение layout
 
-UI собирается в `create_ui()`. Если добавляется новая панель, нужно обновить:
+Основной UI собирается в `create_ui()`, стартовый экран — в
+`create_profile_selector_ui()`. При добавлении панели или экрана нужно обновить:
 
 - `create_ui()`
 - `toggle_console()`
-- `handle_input()` для корректного `Tab`
+- `handle_input()` для корректного цикла `Tab`/`Shift+Tab`
 
 ### Добавление хоткеев
 
@@ -439,7 +451,8 @@ UI собирается в `create_ui()`. Если добавляется нов
 
 ### Текущее состояние
 
-В репозитории нет автоматизированного набора тестов. Старые примеры тестов в документе не соответствовали фактическому имени модуля и состоянию проекта.
+Регрессионные тесты находятся в `tests/test_performance_paths.py` и покрывают
+пул соединений, пакетный SCAN, DB выше 16, клавиатурный фокус и переходы между экранами.
 
 ### Особенность импорта
 
@@ -486,24 +499,25 @@ spec.loader.exec_module(module)
 
 1. лимит **5000 ключей**
 2. `SCAN` вместо `KEYS`
-3. `count=100`
-4. кэш `KeyListItem` в `key_cache`
-5. подрезка консольной истории на экране
+3. `COUNT 1000` и pipeline `TYPE`
+4. параллельное сканирование cluster master nodes
+5. инкрементальное обновление списка из background workers
+6. периодический health check пула вместо `PING` на каждую команду
+7. кэширование счетчиков через `INFO keyspace`
+8. кэш `KeyListItem` в `key_cache`
+9. подрезка консольной истории на экране
 
-Узкие места:
+Оставшиеся ограничения:
 
-1. cluster scan идет последовательно
-2. для каждого ключа отдельно вызывается `TYPE`
-3. `get_all_db_key_counts()` проходит по всем `DB0-DB15`
-4. список не является true virtualization
+1. список не является true virtualization
+2. UI намеренно останавливается после 5000 уникальных ключей
+3. фильтр применяется к уже загруженному набору ключей
 
-Реалистичные улучшения:
+Возможные дальнейшие улучшения:
 
-1. параллельный cluster scan
-2. lazy type loading
-3. кэш `DBSIZE`
-4. paging/incremental loading
-5. разделение scanning и rendering
+1. полноценный paging или virtualized walker
+2. определение типов только для видимых строк
+3. server-side filtering до заполнения окна из 5000 ключей
 
 ---
 
@@ -622,5 +636,5 @@ cancel_btn = urwid.Button('Cancel', on_press=self.close_dialog(None))
 ---
 
 **Автор проекта:** Тарасов Дмитрий  
-**Версия по коду:** 1.0.0  
+**Версия по коду:** 1.2.0
 **Лицензия:** MIT

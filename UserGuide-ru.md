@@ -19,13 +19,13 @@
 
 ## Введение
 
-**Redis Commander TUI** - терминальный интерфейс для работы с Redis Standalone и Redis Cluster. Приложение позволяет подключаться к нескольким серверам, переключать базы данных, просматривать ключи, редактировать значения, выполнять команды Redis и работать с профилями подключения из обычного JSON, зашифрованного файла или HashiCorp Vault.
+**Redis Commander TUI** - терминальный интерфейс для Redis Standalone, Redis Sentinel и Redis Cluster. Он обнаруживает Sentinel master/replica, переключает DB, показывает и изменяет ключи, выполняет команды и загружает профили из JSON, зашифрованного файла или HashiCorp Vault.
 
 ### Что умеет текущая версия
 
-- Подключение к **Redis Standalone** и **Redis Cluster**
+- Подключение к **Redis Standalone**, **Redis Sentinel** и **Redis Cluster**
 - Несколько профилей подключения в одном конфигурационном файле
-- Переключение между **DB0-DB15** в standalone режиме
+- Переключение между всеми DB, настроенными на standalone-сервере
 - Просмотр списка ключей с определением типа
 - Фильтрация и массовая отметка ключей по glob-шаблонам
 - Добавление и редактирование ключей типов `string`, `hash`, `list`, `set`, `zset`, `bitmap`, `stream`
@@ -42,6 +42,7 @@ PlantUML-исходники для текущей реализации нахо�
 - `diagramms/startup-and-profile-loading.puml`
 - `diagramms/ui-key-workflow.puml`
 - `diagramms/cluster-scan-and-console.puml`
+- `diagramms/sentinel-connection-and-failover-ru.puml`
 
 Для каждой диаграммы также есть русская копия с суффиксом `-ru`.
 
@@ -87,7 +88,8 @@ python redis-commander.py
 python redis-commander.py -c redis_profiles.json
 ```
 
-Если файл конфигурации не найден или пуст, приложение создаст временный профиль `localhost:6379`.
+Если файл конфигурации не найден или пуст, на стартовом экране будет указано,
+что профили не найдены. Добавьте профиль в конфигурацию или выберите `Exit`.
 
 #### Режим 2: зашифрованный конфиг
 
@@ -164,6 +166,15 @@ python redis-commander.py \
 | `readonly` | boolean | режим "безопасного просмотра" на уровне UI |
 | `cluster_mode` | boolean | подключение к Redis Cluster |
 | `cluster_nodes` | array | список узлов кластера |
+| `mode` | string | `standalone`, `cluster` или `sentinel` |
+| `sentinel_service_name` | string | имя из директивы `sentinel monitor` |
+| `sentinels` | array | Sentinel endpoint в формате списка, строки или объекта |
+| `read_preference` | string | `master`, `replica_preferred` или `replica_only` |
+| `replica_selector` | string | `random` или `round_robin` |
+| `sentinel_username`, `sentinel_password` | string/null | отдельные ACL-реквизиты Sentinel |
+| `sentinel_ssl` | boolean | включить TLS для Sentinel discovery |
+| `sentinel_ssl_ca_certs`, `sentinel_ssl_certfile`, `sentinel_ssl_keyfile` | string | TLS-файлы Sentinel |
+| `sentinel_ssl_check_hostname`, `sentinel_ssl_verify` | boolean | проверять имя хоста/сертификаты Sentinel |
 
 ### Допустимые форматы `cluster_nodes`
 
@@ -180,6 +191,34 @@ python redis-commander.py \
 ```
 
 Если `host` и `port` не указаны, для первого подключения будет использован первый узел из `cluster_nodes`.
+
+### Пример Redis Sentinel
+
+```json
+{
+  "production-sentinel": {
+    "name": "production-sentinel",
+    "mode": "sentinel",
+    "sentinel_service_name": "redis-production",
+    "sentinels": [
+      ["sentinel-1.example.com", 26379],
+      ["sentinel-2.example.com", 26379],
+      ["sentinel-3.example.com", 26379]
+    ],
+    "username": "redis-user",
+    "password": "redis-password",
+    "sentinel_username": "sentinel-user",
+    "sentinel_password": "sentinel-password",
+    "read_preference": "replica_preferred",
+    "replica_selector": "round_robin"
+  }
+}
+```
+
+Записи всегда идут на master, указанный Sentinel. Разрешенные чтения следуют
+заданной политике и на replica могут видеть устаревшие данные. После connection
+error, `READONLY`, `MASTERDOWN` или ошибки SCAN топология обновляется. Сетевая
+ошибка записи с неоднозначным результатом не приводит к автоматическому повтору.
 
 ### TLS/SSL пример
 
@@ -229,10 +268,11 @@ python config-encryptor.py redis_profiles.json redis_profiles.enc
 
 ### Общая схема экрана
 
+- Стартовый экран: серверы и кластеры из конфигурации, а также явный пункт `Exit`
 - Верхняя строка: заголовок приложения
 - Панель кнопок: `F1`, `F2`, `F3`, `F4`, `F8`, `F9`, `F10`, `F11`
 - Левая область:
-  - сверху дерево подключений и баз данных
+  - сверху список DB активного сервера или кластера
   - снизу список ключей
 - Правая область: детали выбранного ключа
 - Нижняя строка: статус
@@ -240,15 +280,13 @@ python config-encryptor.py redis_profiles.json redis_profiles.enc
 
 ### Левая панель
 
-Левая часть экрана объединяет два блока:
+После успешного подключения левая часть экрана объединяет два блока:
 
-1. Список профилей подключения
-2. Список баз данных и ключей текущего подключения
+1. Список DB текущего подключения
+2. Список ключей выбранной DB
 
 Индикаторы:
 
-- `●` - подключение активно
-- `○` - профиль не подключен
 - `▪` - активная база данных
 - `▫` - неактивная база данных
 - `[St]` - `string`
@@ -276,7 +314,7 @@ python config-encryptor.py redis_profiles.json redis_profiles.enc
 
 - историю команд и результатов
 - строку ввода `redis>`
-- отдельный фокус, доступный по `Tab`
+- отдельный фокус, который автоматически выбирается при открытии консоли
 
 ---
 
@@ -284,10 +322,12 @@ python config-encryptor.py redis_profiles.json redis_profiles.enc
 
 ### Выбор подключения и базы данных
 
-1. Выберите профиль в дереве подключений
-2. Для standalone выберите `DB0`-`DB15`
-3. Для Redis Cluster доступна только `DB0`
-4. После выбора приложение автоматически пересканирует ключи
+1. На стартовом экране выберите профиль из конфигурации и нажмите `Enter`
+2. При ошибке подключения изучите диагностическое окно и выберите `Retry`, `Back` или `Exit`
+3. После подключения к standalone выберите любую DB, настроенную на сервере
+4. Для Redis Cluster доступна только `DB0`
+5. После выбора DB приложение автоматически пересканирует ключи
+6. `F9` полностью закрывает соединение и возвращает к стартовому списку профилей
 
 ### Сканирование и просмотр
 
@@ -506,11 +546,12 @@ redis> HGETALL user:1001
 | `F3` | добавить ключ |
 | `F4` | редактировать выбранный ключ |
 | `F8` | удалить отмеченные ключи |
-| `F9` | отключиться от текущего сервера |
+| `F9` | отключиться и вернуться к выбору профиля |
 | `F10` | выход из приложения |
 | `F11` | пересканировать ключи |
 | `F12` | вывести диагностическую информацию по кластеру в панель деталей |
-| `Tab` | переключить фокус между панелями |
+| `Tab` | переместить фокус: DB → ключи → детали |
+| `Shift+Tab` | переместить фокус в обратном направлении |
 | `q` / `Q` | выход из приложения вне режима консоли |
 | `Esc` | закрыть консоль или диалог |
 
@@ -628,7 +669,7 @@ python redis-commander.py \
 
 ### Что происходит, если конфиг отсутствует?
 
-Если JSON-файл не найден, приложение стартует с временным профилем `localhost:6379`.
+Если JSON-файл не найден, стартовый экран сообщает, что профили отсутствуют.
 
 ### Можно ли работать с бинарными значениями?
 
@@ -639,7 +680,7 @@ python redis-commander.py \
 
 ### Как переключаться между базами данных?
 
-- в standalone режиме доступны `DB0-DB15`
+- в standalone режиме UI читает настроенное число баз и поддерживает DB16 и выше
 - в cluster режиме доступна только `DB0`
 
 ### Как лучше работать с multi-key командами в кластере?
@@ -700,5 +741,5 @@ redis_tui_audit.log
 ---
 
 **Автор:** Тарасов Дмитрий  
-**Версия по коду:** 1.0.0  
+**Версия по коду:** 1.2.0
 **Лицензия:** MIT

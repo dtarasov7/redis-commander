@@ -12,11 +12,14 @@ participant "Console" as Console
 User -> UI: Connect to cluster profile
 UI -> Cluster: connect_to_profile()
 UI -> Cluster: refresh_keys()
-Cluster -> NodeA: SCAN + TYPE
-NodeA --> Cluster: keys and types
-Cluster -> NodeB: SCAN + TYPE
-NodeB --> Cluster: keys and types
-Cluster --> UI: merged unique key list
+par master A worker
+  Cluster -> NodeA: SCAN batches + pipelined TYPE
+  NodeA --> Cluster: typed key batches
+else master B worker
+  Cluster -> NodeB: SCAN batches + pipelined TYPE
+  NodeB --> Cluster: typed key batches
+end
+Cluster --> UI: incremental unique keys (global limit)
 
 == Console Commands ==
 User -> Console: Enter command
